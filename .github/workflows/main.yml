@@ -1,5 +1,4 @@
 name: ARM64 Full Crypto Validation
-
 on:
   workflow_dispatch:
 
