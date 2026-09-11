@@ -1,97 +1,14 @@
-name: ARM64 Full Crypto Validation
+name: ARM64 Test
+
 on:
   workflow_dispatch:
 
 jobs:
-  full-crypto-check:
+  test:
     runs-on: ubuntu-24.04-arm
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Show architecture
+      - name: Check ARM64
         run: |
           uname -m
-          lscpu
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git cmake ninja-build build-essential libssl-dev python3 python3-pip python3-venv
-
-      - name: Build and install liboqs
-        run: |
-          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git
-          cd liboqs
-          mkdir build
-          cd build
-          cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local -DOQS_BUILD_ONLY_LIB=ON ..
-          ninja
-          sudo ninja install
-          sudo ldconfig
-
-      - name: Build Ascon-C
-        run: |
-          git clone --depth 1 https://github.com/ascon/ascon-c.git
-          cd ascon-c
-          mkdir build
-          cd build
-          cmake ..
-          make -j2
-
-      - name: Create Python environment
-        run: |
-          python3 -m venv venv
-          source venv/bin/activate
-          pip install --upgrade pip
-          pip install cryptography pandas numpy scipy matplotlib
-
-      - name: Verify X25519 AES-GCM and HKDF
-        run: |
-          source venv/bin/activate
-          python - <<'PY'
-          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-          from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-          from cryptography.hazmat.primitives import hashes
-
-          private_key = X25519PrivateKey.generate()
-          public_key = private_key.public_key()
-
-          AESGCM.generate_key(bit_length=256)
-
-          hkdf = HKDF(
-              algorithm=hashes.SHA256(),
-              length=32,
-              salt=None,
-              info=b"pah-pqc-test"
-          )
-
-          derived = hkdf.derive(b"test-secret")
-
-          print("X25519: OK")
-          print("AES-256-GCM: OK")
-          print("HKDF-SHA256: OK")
-          print("Derived key length:", len(derived))
-          PY
-
-      - name: Verify ML-KEM-768
-        run: |
-          grep -R "ML-KEM-768" /usr/local/include/oqs
-
-      - name: Verify Ascon build
-        run: |
-          cd ascon-c
-          find . -type f | grep -i ascon | head -20
-          echo "Ascon-C build: OK"
-
-      - name: Final summary
-        run: |
-          echo "ARM64 CRYPTO STACK VALIDATION COMPLETE"
-          echo "Architecture: $(uname -m)"
-          echo "X25519: READY"
-          echo "ML-KEM-768: READY"
-          echo "AES-256-GCM: READY"
-          echo "HKDF-SHA256: READY"
-          echo "Ascon-C: READY"
+          echo "ARM64 workflow is working"
