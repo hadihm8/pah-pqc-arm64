@@ -1,4 +1,4 @@
-name: ARM64 Crypto Core Check
+name: ARM64 Crypto Core with ML-KEM
 
 on:
   workflow_dispatch:
@@ -21,24 +21,7 @@ jobs:
 
       - name: Verify X25519 AES-GCM HKDF
         run: |
-      - name: Install liboqs dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git cmake ninja-build build-essential libssl-dev
-
-      - name: Build and verify ML-KEM-768
-        run: |
-          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git
-          cd liboqs
-          mkdir build
-          cd build
-          cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local -DOQS_BUILD_ONLY_LIB=ON ..
-          ninja
-          sudo ninja install
-          sudo ldconfig
-          grep -R "ML-KEM-768" /usr/local/include/oqs
-          echo "ML-KEM-768: OK"
-              source venv/bin/activate
+          source venv/bin/activate
           python - <<'PY'
           from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
           from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -48,7 +31,7 @@ jobs:
           private_key = X25519PrivateKey.generate()
           public_key = private_key.public_key()
 
-          aes_key = AESGCM.generate_key(bit_length=256)
+          AESGCM.generate_key(bit_length=256)
 
           hkdf = HKDF(
               algorithm=hashes.SHA256(),
@@ -64,3 +47,24 @@ jobs:
           print("HKDF-SHA256: OK")
           print("Derived key length:", len(derived_key))
           PY
+
+      - name: Install liboqs build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git cmake ninja-build build-essential libssl-dev
+
+      - name: Build liboqs
+        run: |
+          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git
+          cd liboqs
+          mkdir build
+          cd build
+          cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local -DOQS_BUILD_ONLY_LIB=ON ..
+          ninja
+          sudo ninja install
+          sudo ldconfig
+
+      - name: Verify ML-KEM-768
+        run: |
+          grep -R "ML-KEM-768" /usr/local/include/oqs
+          echo "ML-KEM-768: OK"
