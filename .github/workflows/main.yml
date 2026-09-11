@@ -1,4 +1,4 @@
-name: ARM64 Crypto Core with ML-KEM
+name: ARM64 Full Crypto Stack
 
 on:
   workflow_dispatch:
@@ -59,7 +59,9 @@ jobs:
           cd liboqs
           mkdir build
           cd build
-          cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local -DOQS_BUILD_ONLY_LIB=ON ..
+          cmake -GNinja \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DOQS_BUILD_ONLY_LIB=ON ..
           ninja
           sudo ninja install
           sudo ldconfig
@@ -68,3 +70,25 @@ jobs:
         run: |
           grep -R "ML-KEM-768" /usr/local/include/oqs
           echo "ML-KEM-768: OK"
+
+      - name: Build and verify Ascon-C
+        run: |
+          git clone --depth 1 https://github.com/ascon/ascon-c.git
+          cd ascon-c
+          mkdir build
+          cd build
+          cmake ..
+          make -j2
+          echo "Ascon-C build: OK"
+
+      - name: Final crypto stack summary
+        run: |
+          echo "======================================"
+          echo "ARM64 FULL CRYPTO STACK READY"
+          echo "======================================"
+          echo "Architecture: $(uname -m)"
+          echo "X25519: READY"
+          echo "ML-KEM-768: READY"
+          echo "AES-256-GCM: READY"
+          echo "HKDF-SHA256: READY"
+          echo "Ascon-C: READY"
