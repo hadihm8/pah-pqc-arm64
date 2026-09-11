@@ -1,4 +1,4 @@
-  name: ARM64 Full Crypto Validation
+name: ARM64 Full Crypto Validation
 
 on:
   workflow_dispatch:
@@ -19,15 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            cmake \
-            ninja-build \
-            build-essential \
-            libssl-dev \
-            python3 \
-            python3-pip \
-            python3-venv
+          sudo apt-get install -y git cmake ninja-build build-essential libssl-dev python3 python3-pip python3-venv
 
       - name: Build and install liboqs
         run: |
@@ -35,9 +27,7 @@ jobs:
           cd liboqs
           mkdir build
           cd build
-          cmake -GNinja \
-            -DCMAKE_INSTALL_PREFIX=/usr/local \
-            -DOQS_BUILD_ONLY_LIB=ON ..
+          cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local -DOQS_BUILD_ONLY_LIB=ON ..
           ninja
           sudo ninja install
           sudo ldconfig
@@ -76,8 +66,9 @@ jobs:
               algorithm=hashes.SHA256(),
               length=32,
               salt=None,
-              info=b"pah-pqc-test",
+              info=b"pah-pqc-test"
           )
+
           derived = hkdf.derive(b"test-secret")
 
           print("X25519: OK")
@@ -93,14 +84,12 @@ jobs:
       - name: Verify Ascon build
         run: |
           cd ascon-c
-          find . -type f | grep -i ascon | head -50
+          find . -type f | grep -i ascon | head -20
           echo "Ascon-C build: OK"
 
-      - name: Final crypto stack summary
+      - name: Final summary
         run: |
-          echo "======================================"
           echo "ARM64 CRYPTO STACK VALIDATION COMPLETE"
-          echo "======================================"
           echo "Architecture: $(uname -m)"
           echo "X25519: READY"
           echo "ML-KEM-768: READY"
