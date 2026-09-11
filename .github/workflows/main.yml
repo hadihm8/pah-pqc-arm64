@@ -1,14 +1,49 @@
-name: ARM64 Test
+name: ARM64 Crypto Core Check
 
 on:
   workflow_dispatch:
 
 jobs:
-  test:
+  crypto-core:
     runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Check ARM64
         run: |
           uname -m
-          echo "ARM64 workflow is working"
+
+      - name: Setup Python
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install cryptography
+
+      - name: Verify X25519 AES-GCM HKDF
+        run: |
+          source venv/bin/activate
+          python - <<'PY'
+          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+          from cryptography.hazmat.primitives import hashes
+
+          private_key = X25519PrivateKey.generate()
+          public_key = private_key.public_key()
+
+          aes_key = AESGCM.generate_key(bit_length=256)
+
+          hkdf = HKDF(
+              algorithm=hashes.SHA256(),
+              length=32,
+              salt=None,
+              info=b"PAH-PQC"
+          )
+
+          derived_key = hkdf.derive(b"shared-secret")
+
+          print("X25519: OK")
+          print("AES-256-GCM: OK")
+          print("HKDF-SHA256: OK")
+          print("Derived key length:", len(derived_key))
+          PY
