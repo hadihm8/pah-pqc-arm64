@@ -20,9 +20,9 @@ jobs:
           pip install cryptography
 
       - name: Verify X25519 AES-GCM HKDF
-      run: |
-     - name: Install liboqs dependencies
-       run: |
+        run: |
+      - name: Install liboqs dependencies
+        run: |
           sudo apt-get update
           sudo apt-get install -y git cmake ninja-build build-essential libssl-dev
 
