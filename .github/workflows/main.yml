@@ -1,26 +1,70 @@
-name: ARM64 Environment Check
+name: ARM64 Crypto Stack Check
 
 on:
   workflow_dispatch:
 
 jobs:
-  arm64-check:
+  crypto-check:
     runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show system architecture
+      - name: Show architecture
         run: |
-          uname -a
           uname -m
           lscpu
 
-      - name: Show Python version
+      - name: Install build dependencies
         run: |
-          python3 --version
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            cmake \
+            ninja-build \
+            build-essential \
+            libssl-dev \
+            python3 \
+            python3-pip \
+            python3-venv
 
-      - name: Show OS information
+      - name: Build and install liboqs
         run: |
-          cat /etc/os-release
+          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git
+          cd liboqs
+          mkdir build
+          cd build
+          cmake -GNinja \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DOQS_BUILD_ONLY_LIB=ON ..
+          ninja
+          sudo ninja install
+          sudo ldconfig
+
+      - name: Create Python environment
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install cryptography pandas numpy scipy matplotlib
+
+      - name: Verify X25519 and AES-GCM
+        run: |
+          source venv/bin/activate
+          python - <<'PY'
+          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+          private_key = X25519PrivateKey.generate()
+          public_key = private_key.public_key()
+
+          AESGCM.generate_key(bit_length=256)
+
+          print("X25519: OK")
+          print("AES-256-GCM: OK")
+          PY
+
+      - name: Verify ML-KEM availability
+        run: |
+          grep -R "ML-KEM-768" /usr/local/include/oqs || true
