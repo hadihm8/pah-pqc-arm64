@@ -320,14 +320,12 @@ def figure_cv(summary):
 # FIGURES 4-10
 # Boxplot for each payload size
 # ============================================================
-
 def figure_boxplots(raw):
 
     for payload in PAYLOAD_ORDER:
 
         subset = raw[
-            raw["payload_bytes"]
-            == payload
+            raw["payload_bytes"] == payload
         ]
 
         data = [
@@ -341,10 +339,10 @@ def figure_boxplots(raw):
             figsize=(7.5, 5)
         )
 
-       ax.boxplot(
-         data,
-          tick_labels=MODES,
-          showmeans=True
+        ax.boxplot(
+            data,
+            tick_labels=MODES,
+            showmeans=True
         )
 
         ax.set_xlabel(
