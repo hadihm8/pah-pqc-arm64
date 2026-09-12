@@ -1,0 +1,41 @@
+name: PAH-PQC Weight Sensitivity Analysis
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sensitivity:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check ARM64
+        run: |
+          uname -m
+
+      - name: Setup Python
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install pandas numpy
+
+      - name: Run weight sensitivity analysis
+        run: |
+          source venv/bin/activate
+          python3 weight_sensitivity_analysis.py
+
+      - name: Show robustness results
+        run: |
+          cat weight_sensitivity_robustness.csv
+
+      - name: Upload sensitivity results
+        uses: actions/upload-artifact@v4
+        with:
+          name: pah-pqc-weight-sensitivity-results
+          path: |
+            weight_sensitivity_results.csv
+            weight_sensitivity_consensus.csv
+            weight_sensitivity_robustness.csv
