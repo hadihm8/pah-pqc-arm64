@@ -1,94 +1,20 @@
-name: ARM64 Full Crypto Stack
+name: PAH-PQC Policy Test
 
 on:
   workflow_dispatch:
 
 jobs:
-  crypto-core:
+  policy-test:
     runs-on: ubuntu-24.04-arm
 
     steps:
-      - name: Check ARM64
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check architecture
         run: |
           uname -m
 
-      - name: Setup Python
+      - name: Run PAH-PQC policy engine
         run: |
-          python3 -m venv venv
-          source venv/bin/activate
-          pip install --upgrade pip
-          pip install cryptography
-
-      - name: Verify X25519 AES-GCM HKDF
-        run: |
-          source venv/bin/activate
-          python - <<'PY'
-          from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-          from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-          from cryptography.hazmat.primitives import hashes
-
-          private_key = X25519PrivateKey.generate()
-          public_key = private_key.public_key()
-
-          AESGCM.generate_key(bit_length=256)
-
-          hkdf = HKDF(
-              algorithm=hashes.SHA256(),
-              length=32,
-              salt=None,
-              info=b"PAH-PQC"
-          )
-
-          derived_key = hkdf.derive(b"shared-secret")
-
-          print("X25519: OK")
-          print("AES-256-GCM: OK")
-          print("HKDF-SHA256: OK")
-          print("Derived key length:", len(derived_key))
-          PY
-
-      - name: Install liboqs build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y git cmake ninja-build build-essential libssl-dev
-
-      - name: Build liboqs
-        run: |
-          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git
-          cd liboqs
-          mkdir build
-          cd build
-          cmake -GNinja \
-            -DCMAKE_INSTALL_PREFIX=/usr/local \
-            -DOQS_BUILD_ONLY_LIB=ON ..
-          ninja
-          sudo ninja install
-          sudo ldconfig
-
-      - name: Verify ML-KEM-768
-        run: |
-          grep -R "ML-KEM-768" /usr/local/include/oqs
-          echo "ML-KEM-768: OK"
-
-      - name: Build and verify Ascon-C
-        run: |
-          git clone --depth 1 https://github.com/ascon/ascon-c.git
-          cd ascon-c
-          mkdir build
-          cd build
-          cmake ..
-          make -j2
-          echo "Ascon-C build: OK"
-
-      - name: Final crypto stack summary
-        run: |
-          echo "======================================"
-          echo "ARM64 FULL CRYPTO STACK READY"
-          echo "======================================"
-          echo "Architecture: $(uname -m)"
-          echo "X25519: READY"
-          echo "ML-KEM-768: READY"
-          echo "AES-256-GCM: READY"
-          echo "HKDF-SHA256: READY"
-          echo "Ascon-C: READY"
+          python3 pah_pqc.py
