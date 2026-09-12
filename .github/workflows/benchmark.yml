@@ -57,14 +57,13 @@ jobs:
 
           gcc -O3 -fPIC -shared \
             -Icrypto_aead/asconaead128/ref \
-            crypto_aead/asconaead128/ref/aead.c \
-            crypto_aead/asconaead128/ref/ascon.c \
+            -Itests \
+            crypto_aead/asconaead128/ref/*.c \
             -o ../libascon.so
 
           cd ..
-
           ls -lh libascon.so
-
+          echo "Ascon shared library: OK"
       - name: Run PAH-PQC pilot benchmark
         env:
           LD_LIBRARY_PATH: /usr/local/lib
