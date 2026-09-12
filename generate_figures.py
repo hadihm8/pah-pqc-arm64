@@ -341,10 +341,10 @@ def figure_boxplots(raw):
             figsize=(7.5, 5)
         )
 
-        ax.boxplot(
-            data,
-            labels=MODES,
-            showmeans=True
+       ax.boxplot(
+         data,
+          tick_labels=MODES,
+          showmeans=True
         )
 
         ax.set_xlabel(
