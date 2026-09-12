@@ -1,0 +1,34 @@
+name: PAH-PQC Publication Figures
+
+on:
+  workflow_dispatch:
+
+jobs:
+  figures:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install pandas numpy matplotlib
+
+      - name: Generate publication figures
+        run: |
+          source venv/bin/activate
+          python3 generate_figures.py
+
+      - name: List generated figures
+        run: |
+          find figures -type f -maxdepth 1 | sort
+
+      - name: Upload publication figures
+        uses: actions/upload-artifact@v4
+        with:
+          name: pah-pqc-publication-figures
+          path: figures/
