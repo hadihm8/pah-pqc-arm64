@@ -1,0 +1,50 @@
+name: PAH-PQC Cross-Session Analysis
+
+on:
+  workflow_dispatch:
+
+jobs:
+  reproducibility:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check ARM64
+        run: |
+          uname -m
+
+      - name: Setup Python
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install pandas numpy scipy statsmodels
+
+      - name: Run cross-session analysis
+        run: |
+          source venv/bin/activate
+          python3 cross_session_analysis.py
+
+      - name: Validate outputs
+        run: |
+          wc -l cross_session_means.csv
+          wc -l cross_session_pooled_summary.csv
+          wc -l cross_session_effect_tests.csv
+          wc -l cross_session_5mb_check.csv
+
+          echo "Expected session means including header: 106"
+          echo "Expected pooled summary including header: 36"
+          echo "Expected session-effect tests including header: 36"
+          echo "Expected 5MB check including header: 6"
+
+      - name: Upload reproducibility results
+        uses: actions/upload-artifact@v4
+        with:
+          name: pah-pqc-cross-session-results
+          path: |
+            cross_session_means.csv
+            cross_session_pooled_summary.csv
+            cross_session_effect_tests.csv
+            cross_session_5mb_check.csv
