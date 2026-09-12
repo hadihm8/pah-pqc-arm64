@@ -5,7 +5,7 @@ import random
 import statistics
 import ctypes
 import platform
-from pathlib import Path
+import math
 
 import oqs
 
@@ -15,18 +15,23 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 
 
-# ============================================================
-# PAH-PQC ARM64 PILOT BENCHMARK
-# ============================================================
+PAYLOAD_SIZES = [
+    1024,
+    10 * 1024,
+    100 * 1024,
+    1 * 1024 * 1024,
+    5 * 1024 * 1024,
+    10 * 1024 * 1024,
+    50 * 1024 * 1024,
+]
 
-PAYLOAD_SIZE = 1024          # 1 KB
 WARMUP_RUNS = 5
-MEASURED_RUNS = 10
+MEASURED_RUNS = 30
 
 MODES = ["M1", "M2", "M3", "M4", "M5"]
 
-RAW_FILE = "pilot_results_raw.csv"
-SUMMARY_FILE = "pilot_results_summary.csv"
+RAW_FILE = "official_results_raw.csv"
+SUMMARY_FILE = "official_results_summary.csv"
 
 
 # ============================================================
@@ -42,9 +47,7 @@ ascon = ctypes.CDLL(ASCON_LIBRARY)
 
 U8 = ctypes.c_ubyte
 ULL = ctypes.c_ulonglong
-
 U8_PTR = ctypes.POINTER(U8)
-
 
 ascon.crypto_aead_encrypt.argtypes = [
     U8_PTR,
@@ -59,7 +62,6 @@ ascon.crypto_aead_encrypt.argtypes = [
 ]
 
 ascon.crypto_aead_encrypt.restype = ctypes.c_int
-
 
 ascon.crypto_aead_decrypt.argtypes = [
     U8_PTR,
@@ -80,30 +82,20 @@ def byte_array(data: bytes):
     return (U8 * len(data)).from_buffer_copy(data)
 
 
-def ascon_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
-
-    if len(key) != 16:
-        raise ValueError("Ascon-AEAD128 requires a 16-byte key.")
-
-    if len(nonce) != 16:
-        raise ValueError("Ascon-AEAD128 requires a 16-byte nonce.")
-
+def ascon_encrypt(key, nonce, plaintext):
     message = byte_array(plaintext)
     key_buf = byte_array(key)
     nonce_buf = byte_array(nonce)
 
-    # ciphertext + 16-byte authentication tag
     ciphertext = (U8 * (len(plaintext) + 16))()
     ciphertext_len = ULL()
-
-    null_ad = U8_PTR()
 
     result = ascon.crypto_aead_encrypt(
         ciphertext,
         ctypes.byref(ciphertext_len),
         message,
         ULL(len(plaintext)),
-        null_ad,
+        U8_PTR(),
         ULL(0),
         None,
         nonce_buf,
@@ -111,13 +103,12 @@ def ascon_encrypt(key: bytes, nonce: bytes, plaintext: bytes) -> bytes:
     )
 
     if result != 0:
-        raise RuntimeError("Ascon encryption failed.")
+        raise RuntimeError("Ascon encryption failed")
 
     return bytes(ciphertext[:ciphertext_len.value])
 
 
-def ascon_decrypt(key: bytes, nonce: bytes, ciphertext: bytes) -> bytes:
-
+def ascon_decrypt(key, nonce, ciphertext):
     cipher_buf = byte_array(ciphertext)
     key_buf = byte_array(key)
     nonce_buf = byte_array(nonce)
@@ -125,22 +116,20 @@ def ascon_decrypt(key: bytes, nonce: bytes, ciphertext: bytes) -> bytes:
     plaintext = (U8 * len(ciphertext))()
     plaintext_len = ULL()
 
-    null_ad = U8_PTR()
-
     result = ascon.crypto_aead_decrypt(
         plaintext,
         ctypes.byref(plaintext_len),
         None,
         cipher_buf,
         ULL(len(ciphertext)),
-        null_ad,
+        U8_PTR(),
         ULL(0),
         nonce_buf,
         key_buf,
     )
 
     if result != 0:
-        raise RuntimeError("Ascon authentication/decryption failed.")
+        raise RuntimeError("Ascon decryption failed")
 
     return bytes(plaintext[:plaintext_len.value])
 
@@ -149,97 +138,71 @@ def ascon_decrypt(key: bytes, nonce: bytes, ciphertext: bytes) -> bytes:
 # KEY DERIVATION
 # ============================================================
 
-def derive_key(shared_material: bytes, length: int) -> bytes:
-
+def derive_key(shared_material, length):
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=length,
         salt=None,
         info=b"PAH-PQC-ARM64-SESSION",
     )
-
     return hkdf.derive(shared_material)
 
 
 # ============================================================
-# X25519 KEY ESTABLISHMENT
+# KEY ESTABLISHMENT
 # ============================================================
 
-def x25519_key_establishment() -> bytes:
+def x25519_key_establishment():
+    a_priv = X25519PrivateKey.generate()
+    b_priv = X25519PrivateKey.generate()
 
-    sender_private = X25519PrivateKey.generate()
-    receiver_private = X25519PrivateKey.generate()
+    a_secret = a_priv.exchange(
+        b_priv.public_key()
+    )
 
-    sender_public = sender_private.public_key()
-    receiver_public = receiver_private.public_key()
+    b_secret = b_priv.exchange(
+        a_priv.public_key()
+    )
 
-    sender_secret = sender_private.exchange(receiver_public)
-    receiver_secret = receiver_private.exchange(sender_public)
+    if a_secret != b_secret:
+        raise RuntimeError("X25519 verification failed")
 
-    if sender_secret != receiver_secret:
-        raise RuntimeError(
-            "X25519 shared-secret verification failed."
-        )
-
-    return sender_secret
+    return a_secret
 
 
-# ============================================================
-# ML-KEM-768 KEY ESTABLISHMENT
-# ============================================================
+def mlkem768_key_establishment():
+    with oqs.KeyEncapsulation("ML-KEM-768") as receiver:
+        public_key = receiver.generate_keypair()
 
-def mlkem768_key_establishment() -> bytes:
-
-    with oqs.KeyEncapsulation("ML-KEM-768") as client:
-        with oqs.KeyEncapsulation("ML-KEM-768") as server:
-
-            public_key = client.generate_keypair()
-
-            ciphertext, server_secret = (
-                server.encap_secret(public_key)
+        with oqs.KeyEncapsulation("ML-KEM-768") as sender:
+            ciphertext, sender_secret = sender.encap_secret(
+                public_key
             )
 
-            client_secret = client.decap_secret(
+            receiver_secret = receiver.decap_secret(
                 ciphertext
             )
 
-            if client_secret != server_secret:
+            if sender_secret != receiver_secret:
                 raise RuntimeError(
-                    "ML-KEM-768 shared-secret verification failed."
+                    "ML-KEM-768 verification failed"
                 )
 
-            return client_secret
+            return sender_secret
 
 
 # ============================================================
-# COMMUNICATION OVERHEAD
+# OVERHEAD
 # ============================================================
 
-def communication_overhead(mode: str) -> int:
-
-    # X25519:
-    # two 32-byte public keys = 64 bytes
-    #
-    # ML-KEM-768:
-    # public key = 1184 bytes
-    # ciphertext = 1088 bytes
-    #
-    # AES-GCM:
-    # nonce = 12 bytes
-    # authentication tag = 16 bytes
-    #
-    # Ascon-AEAD128:
-    # nonce = 16 bytes
-    # authentication tag = 16 bytes
-
+def communication_overhead(mode):
     overheads = {
-        "M1": 64 + 12 + 16,
-        "M2": 1184 + 1088 + 12 + 16,
-        "M3": 1184 + 1088 + 16 + 16,
-        "M4": 64 + 1184 + 1088 + 12 + 16,
-        "M5": 64 + 1184 + 1088 + 16 + 16,
+        "M1": 92,
+        "M2": 2300,
+        "M3": 2304,
+        "M4": 2364,
+        "M5": 2368,
     }
-
     return overheads[mode]
 
 
@@ -247,235 +210,218 @@ def communication_overhead(mode: str) -> int:
 # MODEL EXECUTION
 # ============================================================
 
-def run_model(mode: str, payload: bytes):
-
-    # --------------------------------------------------------
-    # KEY ESTABLISHMENT
-    # --------------------------------------------------------
-
+def run_model(mode, payload):
     key_start = time.perf_counter_ns()
 
     if mode == "M1":
-
         shared_material = x25519_key_establishment()
 
     elif mode in ("M2", "M3"):
-
         shared_material = mlkem768_key_establishment()
 
     elif mode in ("M4", "M5"):
-
         classical_secret = x25519_key_establishment()
-
         pq_secret = mlkem768_key_establishment()
-
-        shared_material = (
-            classical_secret +
-            pq_secret
-        )
+        shared_material = classical_secret + pq_secret
 
     else:
-        raise ValueError(
-            f"Unknown mode: {mode}"
-        )
+        raise ValueError(mode)
 
-    if mode in ("M1", "M2", "M4"):
-        session_key = derive_key(
-            shared_material,
-            32
-        )
-    else:
-        session_key = derive_key(
-            shared_material,
-            16
-        )
+    key_length = 32 if mode in ("M1", "M2", "M4") else 16
+
+    session_key = derive_key(
+        shared_material,
+        key_length
+    )
 
     key_end = time.perf_counter_ns()
 
-    # --------------------------------------------------------
-    # AUTHENTICATED ENCRYPTION
-    # --------------------------------------------------------
-
     if mode in ("M1", "M2", "M4"):
-
         nonce = os.urandom(12)
-        aes = AESGCM(session_key)
+        cipher = AESGCM(session_key)
 
         enc_start = time.perf_counter_ns()
-
-        ciphertext = aes.encrypt(
+        ciphertext = cipher.encrypt(
             nonce,
             payload,
             None
         )
-
         enc_end = time.perf_counter_ns()
 
         dec_start = time.perf_counter_ns()
-
-        recovered = aes.decrypt(
+        recovered = cipher.decrypt(
             nonce,
             ciphertext,
             None
         )
-
         dec_end = time.perf_counter_ns()
 
     else:
-
         nonce = os.urandom(16)
 
         enc_start = time.perf_counter_ns()
-
         ciphertext = ascon_encrypt(
             session_key,
             nonce,
             payload
         )
-
         enc_end = time.perf_counter_ns()
 
         dec_start = time.perf_counter_ns()
-
         recovered = ascon_decrypt(
             session_key,
             nonce,
             ciphertext
         )
-
         dec_end = time.perf_counter_ns()
 
     if recovered != payload:
         raise RuntimeError(
-            f"{mode}: recovered plaintext mismatch."
+            f"{mode}: plaintext mismatch"
         )
 
-    key_ms = (
-        key_end - key_start
-    ) / 1_000_000
+    key_ms = (key_end - key_start) / 1_000_000
+    enc_ms = (enc_end - enc_start) / 1_000_000
+    dec_ms = (dec_end - dec_start) / 1_000_000
+    total_ms = key_ms + enc_ms + dec_ms
 
-    enc_ms = (
-        enc_end - enc_start
-    ) / 1_000_000
+    enc_seconds = (enc_end - enc_start) / 1_000_000_000
 
-    dec_ms = (
-        dec_end - dec_start
-    ) / 1_000_000
-
-    total_ms = (
-        key_ms +
-        enc_ms +
-        dec_ms
-    )
-
-    encryption_seconds = (
-        enc_end - enc_start
-    ) / 1_000_000_000
-
-    throughput_mbps = (
-        PAYLOAD_SIZE / 1_000_000
-    ) / encryption_seconds
-
-    overhead = communication_overhead(
-        mode
-    )
+    throughput = (
+        len(payload) / 1_000_000
+    ) / enc_seconds
 
     return {
         "key_ms": key_ms,
         "encryption_ms": enc_ms,
         "decryption_ms": dec_ms,
         "total_ms": total_ms,
-        "throughput_MBps": throughput_mbps,
-        "overhead_bytes": overhead,
+        "throughput_MBps": throughput,
+        "overhead_bytes": communication_overhead(mode),
     }
 
 
 # ============================================================
-# WARM-UP
+# STATISTICS
 # ============================================================
 
-def warm_up(payload: bytes):
+def percentile(values, p):
+    values = sorted(values)
 
-    print("\nStarting warm-up...")
+    if len(values) == 1:
+        return values[0]
 
-    for warmup in range(
-        1,
-        WARMUP_RUNS + 1
-    ):
+    k = (len(values) - 1) * p
+    f = math.floor(k)
+    c = math.ceil(k)
 
-        order = MODES.copy()
-        random.shuffle(order)
+    if f == c:
+        return values[int(k)]
 
-        for mode in order:
-            run_model(
-                mode,
-                payload
-            )
+    return (
+        values[f] * (c - k)
+        + values[c] * (k - f)
+    )
 
-        print(
-            f"Warm-up {warmup}/{WARMUP_RUNS} completed."
-        )
+
+def summarize(values):
+    n = len(values)
+    mean = statistics.mean(values)
+    sd = statistics.stdev(values)
+    median = statistics.median(values)
+
+    q1 = percentile(values, 0.25)
+    q3 = percentile(values, 0.75)
+    iqr = q3 - q1
+
+    se = sd / math.sqrt(n)
+    ci95 = 1.96 * se
+
+    cv = (sd / mean) * 100 if mean != 0 else 0
+
+    return {
+        "mean": mean,
+        "sd": sd,
+        "median": median,
+        "q1": q1,
+        "q3": q3,
+        "iqr": iqr,
+        "ci95_low": mean - ci95,
+        "ci95_high": mean + ci95,
+        "cv_percent": cv,
+        "min": min(values),
+        "max": max(values),
+    }
 
 
 # ============================================================
-# MEASURED BENCHMARK
+# EXPERIMENT
 # ============================================================
 
-def measured_benchmark(payload: bytes):
-
+def run_experiment():
     rows = []
 
-    print("\nStarting measured runs...")
+    for payload_size in PAYLOAD_SIZES:
 
-    for repetition in range(
-        1,
-        MEASURED_RUNS + 1
-    ):
-
-        order = MODES.copy()
-        random.shuffle(order)
-
+        print("\n" + "=" * 80)
         print(
-            f"\nRun {repetition}: "
-            + " -> ".join(order)
+            f"PAYLOAD SIZE: {payload_size} bytes"
         )
+        print("=" * 80)
 
-        for mode in order:
+        payload = os.urandom(payload_size)
 
-            result = run_model(
-                mode,
-                payload
-            )
+        print("Warm-up phase...")
 
-            row = {
-                "run": repetition,
-                "mode": mode,
-                "payload_bytes": PAYLOAD_SIZE,
-                **result,
-            }
+        for warmup in range(WARMUP_RUNS):
+            order = MODES.copy()
+            random.shuffle(order)
 
-            rows.append(row)
+            for mode in order:
+                run_model(
+                    mode,
+                    payload
+                )
+
+        print("Measured phase...")
+
+        for repetition in range(
+            1,
+            MEASURED_RUNS + 1
+        ):
+            order = MODES.copy()
+            random.shuffle(order)
+
+            for mode in order:
+                result = run_model(
+                    mode,
+                    payload
+                )
+
+                rows.append({
+                    "payload_bytes": payload_size,
+                    "run": repetition,
+                    "mode": mode,
+                    **result,
+                })
 
             print(
-                f"{mode}: "
-                f"Total={result['total_ms']:.4f} ms | "
-                f"Throughput="
-                f"{result['throughput_MBps']:.2f} MB/s"
+                f"Completed run "
+                f"{repetition}/{MEASURED_RUNS}"
             )
 
     return rows
 
 
 # ============================================================
-# CSV EXPORT
+# RAW RESULTS
 # ============================================================
 
-def save_raw_results(rows):
-
+def save_raw(rows):
     fieldnames = [
+        "payload_bytes",
         "run",
         "mode",
-        "payload_bytes",
         "key_ms",
         "encryption_ms",
         "decryption_ms",
@@ -489,102 +435,98 @@ def save_raw_results(rows):
         "w",
         newline=""
     ) as file:
-
         writer = csv.DictWriter(
             file,
             fieldnames=fieldnames
         )
-
         writer.writeheader()
         writer.writerows(rows)
 
 
-def save_summary(rows):
+# ============================================================
+# SUMMARY RESULTS
+# ============================================================
 
+def save_summary(rows):
     summary_rows = []
 
-    for mode in MODES:
+    for payload_size in PAYLOAD_SIZES:
+        for mode in MODES:
 
-        mode_rows = [
-            row
-            for row in rows
-            if row["mode"] == mode
-        ]
+            subset = [
+                r for r in rows
+                if r["payload_bytes"] == payload_size
+                and r["mode"] == mode
+            ]
 
-        totals = [
-            row["total_ms"]
-            for row in mode_rows
-        ]
+            total_stats = summarize([
+                r["total_ms"]
+                for r in subset
+            ])
 
-        key_times = [
-            row["key_ms"]
-            for row in mode_rows
-        ]
+            key_stats = summarize([
+                r["key_ms"]
+                for r in subset
+            ])
 
-        encryption_times = [
-            row["encryption_ms"]
-            for row in mode_rows
-        ]
+            enc_stats = summarize([
+                r["encryption_ms"]
+                for r in subset
+            ])
 
-        decryption_times = [
-            row["decryption_ms"]
-            for row in mode_rows
-        ]
+            dec_stats = summarize([
+                r["decryption_ms"]
+                for r in subset
+            ])
 
-        throughputs = [
-            row["throughput_MBps"]
-            for row in mode_rows
-        ]
+            throughput_stats = summarize([
+                r["throughput_MBps"]
+                for r in subset
+            ])
 
-        summary_rows.append({
-            "mode": mode,
-            "payload_bytes": PAYLOAD_SIZE,
+            summary_rows.append({
+                "payload_bytes": payload_size,
+                "mode": mode,
 
-            "mean_key_ms":
-                statistics.mean(key_times),
+                "mean_key_ms": key_stats["mean"],
+                "mean_encryption_ms": enc_stats["mean"],
+                "mean_decryption_ms": dec_stats["mean"],
 
-            "mean_encryption_ms":
-                statistics.mean(encryption_times),
+                "mean_total_ms": total_stats["mean"],
+                "sd_total_ms": total_stats["sd"],
+                "median_total_ms": total_stats["median"],
+                "q1_total_ms": total_stats["q1"],
+                "q3_total_ms": total_stats["q3"],
+                "iqr_total_ms": total_stats["iqr"],
+                "ci95_low_total_ms": total_stats["ci95_low"],
+                "ci95_high_total_ms": total_stats["ci95_high"],
+                "cv_total_percent": total_stats["cv_percent"],
+                "min_total_ms": total_stats["min"],
+                "max_total_ms": total_stats["max"],
 
-            "mean_decryption_ms":
-                statistics.mean(decryption_times),
+                "mean_throughput_MBps":
+                    throughput_stats["mean"],
 
-            "mean_total_ms":
-                statistics.mean(totals),
+                "sd_throughput_MBps":
+                    throughput_stats["sd"],
 
-            "sd_total_ms":
-                statistics.stdev(totals),
+                "overhead_bytes":
+                    communication_overhead(mode),
+            })
 
-            "mean_throughput_MBps":
-                statistics.mean(throughputs),
-
-            "overhead_bytes":
-                communication_overhead(mode),
-        })
-
-    fieldnames = [
-        "mode",
-        "payload_bytes",
-        "mean_key_ms",
-        "mean_encryption_ms",
-        "mean_decryption_ms",
-        "mean_total_ms",
-        "sd_total_ms",
-        "mean_throughput_MBps",
-        "overhead_bytes",
-    ]
+    fieldnames = list(
+        summary_rows[0].keys()
+    )
 
     with open(
         SUMMARY_FILE,
         "w",
         newline=""
     ) as file:
-
         writer = csv.DictWriter(
             file,
             fieldnames=fieldnames
         )
-
         writer.writeheader()
         writer.writerows(summary_rows)
 
@@ -592,40 +534,13 @@ def save_summary(rows):
 
 
 # ============================================================
-# DISPLAY SUMMARY
-# ============================================================
-
-def print_summary(summary_rows):
-
-    print("\n")
-    print("=" * 74)
-    print("PAH-PQC ARM64 PILOT RESULTS")
-    print("=" * 74)
-
-    for row in summary_rows:
-
-        print(
-            f"{row['mode']} | "
-            f"Total={row['mean_total_ms']:.4f} ms | "
-            f"SD={row['sd_total_ms']:.4f} | "
-            f"Throughput="
-            f"{row['mean_throughput_MBps']:.2f} MB/s | "
-            f"Overhead="
-            f"{row['overhead_bytes']} B"
-        )
-
-    print("=" * 74)
-
-
-# ============================================================
 # MAIN
 # ============================================================
 
 def main():
-
-    print("=" * 74)
-    print("PAH-PQC ARM64 PILOT BENCHMARK")
-    print("=" * 74)
+    print("=" * 80)
+    print("PAH-PQC OFFICIAL ARM64 EXPERIMENT")
+    print("=" * 80)
 
     print(
         "Architecture:",
@@ -638,59 +553,62 @@ def main():
     )
 
     print(
-        "Payload:",
-        PAYLOAD_SIZE,
-        "bytes"
+        "Payload sizes:",
+        PAYLOAD_SIZES
     )
 
     print(
-        "Warm-up runs:",
-        WARMUP_RUNS
-    )
-
-    print(
-        "Measured runs:",
+        "Measured runs per mode-size:",
         MEASURED_RUNS
     )
 
-    enabled_kems = (
-        oqs.get_enabled_kem_mechanisms()
+    print(
+        "Expected formal observations:",
+        len(PAYLOAD_SIZES)
+        * len(MODES)
+        * MEASURED_RUNS
     )
 
-    if "ML-KEM-768" not in enabled_kems:
+    if "ML-KEM-768" not in oqs.get_enabled_kem_mechanisms():
         raise RuntimeError(
-            "ML-KEM-768 is not enabled in liboqs."
+            "ML-KEM-768 is unavailable."
         )
 
-    payload = os.urandom(
-        PAYLOAD_SIZE
+    rows = run_experiment()
+
+    expected = (
+        len(PAYLOAD_SIZES)
+        * len(MODES)
+        * MEASURED_RUNS
     )
 
-    warm_up(payload)
+    if len(rows) != expected:
+        raise RuntimeError(
+            f"Expected {expected} observations, "
+            f"but obtained {len(rows)}."
+        )
 
-    rows = measured_benchmark(
-        payload
-    )
+    save_raw(rows)
+    summary_rows = save_summary(rows)
 
-    save_raw_results(
-        rows
-    )
-
-    summary_rows = save_summary(
-        rows
-    )
-
-    print_summary(
-        summary_rows
+    print("\nExperiment completed successfully.")
+    print(
+        "Formal observations:",
+        len(rows)
     )
 
     print(
-        "\nRaw results saved to:",
+        "Summary rows:",
+        len(summary_rows)
+    )
+
+    print(
+        "Raw results:",
         RAW_FILE
     )
 
     print(
-        "Summary saved to:",
+        "Summary results:",
         SUMMARY_FILE
     )
 
